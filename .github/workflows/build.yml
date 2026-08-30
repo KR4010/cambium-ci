@@ -1,0 +1,192 @@
+# Cambium — CI / CD
+#
+# This workflow lives in a PUBLIC repository and checks out the PRIVATE app repo
+# with a PAT. That split is the whole point: public repositories get GitHub Actions
+# minutes for free, macOS runners included, while a private repo on the free plan
+# gets roughly 200 macOS minutes a month. One iOS build eats a good share of that.
+#
+# Builds run with `eas build --local`, so they consume no EAS build credits either —
+# the runner does the work and EAS only supplies credentials and submission.
+
+name: Cambium CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  workflow_dispatch:
+    inputs:
+      build:
+        type: choice
+        description: What to build
+        default: none
+        options: [none, ios, android, all]
+      submit:
+        type: boolean
+        description: Submit the iOS build to TestFlight
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  APP_REPO: KR4010/cambium
+  NODE_VERSION: '20'
+
+jobs:
+  # ── Gate ───────────────────────────────────────────────────────────────────
+  # Nothing is built until the code is known good. These are the same four
+  # commands used locally, so a green CI means exactly what a green terminal does.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_REPO }}
+          token: ${{ secrets.APP_REPO_PAT }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx expo lint --max-warnings 0
+
+      - name: Test
+        run: npm test -- --ci
+
+      - name: Bundle
+        # Catches what typecheck cannot: a module that resolves at build time but
+        # not at runtime. Cheaper to find here than on a device.
+        run: npx expo export --platform ios --output-dir /tmp/bundle-check
+
+  # ── iOS ────────────────────────────────────────────────────────────────────
+  ios:
+    needs: checks
+    runs-on: macos-latest
+    timeout-minutes: 90
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.build == 'ios' || inputs.build == 'all'))
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_REPO }}
+          token: ${{ secrets.APP_REPO_PAT }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm install -g eas-cli
+
+      - name: Verify EAS auth
+        # Fail here with a clear cause rather than 40 minutes into a build.
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas whoami
+
+      - name: Require the RevenueCat key
+        # The paywall degrades gracefully without a key, which is right at runtime
+        # and wrong in a release build — it would ship a store that cannot sell.
+        env:
+          KEY: ${{ secrets.EXPO_PUBLIC_REVENUECAT_KEY_IOS }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::EXPO_PUBLIC_REVENUECAT_KEY_IOS is not set. A release build without it ships a dead paywall."
+            exit 1
+          fi
+          echo "RevenueCat key present."
+
+      - name: Build (local)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_PUBLIC_REVENUECAT_KEY_IOS: ${{ secrets.EXPO_PUBLIC_REVENUECAT_KEY_IOS }}
+          NODE_ENV: production
+        run: |
+          eas build \
+            --platform ios \
+            --profile production \
+            --local \
+            --non-interactive \
+            --output "$RUNNER_TEMP/cambium.ipa"
+
+      - name: Submit to TestFlight
+        if: github.event_name == 'push' || inputs.submit
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_APPLE_ID: ${{ secrets.EXPO_APPLE_ID }}
+          EXPO_TEAM_ID: ${{ secrets.EXPO_TEAM_ID }}
+          ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
+          EXPO_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.EXPO_APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          eas submit \
+            --platform ios \
+            --profile production \
+            --path "$RUNNER_TEMP/cambium.ipa" \
+            --non-interactive
+
+      - name: Keep the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cambium-ios-${{ github.run_number }}
+          path: ${{ runner.temp }}/cambium.ipa
+          retention-days: 14
+          if-no-files-found: error
+
+  # ── Android ────────────────────────────────────────────────────────────────
+  android:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.build == 'android' || inputs.build == 'all')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_REPO }}
+          token: ${{ secrets.APP_REPO_PAT }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - run: npm ci
+      - run: npm install -g eas-cli
+
+      - name: Build (local)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_PUBLIC_REVENUECAT_KEY_ANDROID: ${{ secrets.EXPO_PUBLIC_REVENUECAT_KEY_ANDROID }}
+          NODE_ENV: production
+        run: |
+          eas build \
+            --platform android \
+            --profile production \
+            --local \
+            --non-interactive \
+            --output "$RUNNER_TEMP/cambium.aab"
+
+      - name: Keep the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cambium-android-${{ github.run_number }}
+          path: ${{ runner.temp }}/cambium.aab
+          retention-days: 14
+          if-no-files-found: error
