@@ -29,7 +29,14 @@ value, not its length, not its first characters.
 | `EXPO_APPLE_ID` | Apple ID used for App Store Connect |
 | `EXPO_TEAM_ID` | Apple Developer team id |
 | `ASC_APP_ID` | App Store Connect app id (the numeric one) |
-| `EXPO_APPLE_APP_SPECIFIC_PASSWORD` | appleid.apple.com → Sign-In and Security → App-Specific Passwords |
+| `ASC_API_KEY_P8_BASE64` | The ASC API Key `.p8`, base64-encoded. **The only real secret here.** |
+| `ASC_KEY_ID` | The key's Key ID |
+| `ASC_ISSUER_ID` | The team's Issuer ID |
+
+**No Apple password of any kind is a secret here.** `eas submit` authenticates with an
+App Store Connect API Key that EAS stores on its own servers, so `EXPO_TOKEN` is the only
+credential the submit step needs. `EXPO_APPLE_ID`, `EXPO_TEAM_ID` and `ASC_APP_ID` are
+identifiers, not secrets — they are secrets here only to keep them out of a public repo.
 
 The PAT needs **Contents: read** and nothing else. It cannot write, so a compromised
 runner cannot alter the app repo.

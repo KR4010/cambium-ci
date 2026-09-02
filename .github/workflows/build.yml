@@ -97,17 +97,36 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas whoami
 
-      - name: Require the RevenueCat key
-        # The paywall degrades gracefully without a key, which is right at runtime
-        # and wrong in a release build — it would ship a store that cannot sell.
+      - name: Preflight — every credential the run will need
+        # Checked before a minute of compile time is spent. A missing secret that only
+        # surfaces at the submit step costs a twelve-minute build to discover.
         env:
-          KEY: ${{ secrets.EXPO_PUBLIC_REVENUECAT_KEY_IOS }}
+          RC_KEY: ${{ secrets.EXPO_PUBLIC_REVENUECAT_KEY_IOS }}
+          ASC_P8: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          WILL_SUBMIT: ${{ github.event_name == 'push' || inputs.submit }}
         run: |
-          if [ -z "$KEY" ]; then
+          missing=0
+          if [ -z "$RC_KEY" ]; then
             echo "::error::EXPO_PUBLIC_REVENUECAT_KEY_IOS is not set. A release build without it ships a dead paywall."
-            exit 1
+            missing=1
           fi
-          echo "RevenueCat key present."
+          if [ "$WILL_SUBMIT" = "true" ]; then
+            for name in ASC_P8 ASC_KEY_ID ASC_ISSUER_ID; do
+              if [ -z "${!name}" ]; then
+                echo "::error::App Store Connect secret $name is not set. Submission cannot authenticate unattended — see docs/RELEASE.md."
+                missing=1
+              fi
+            done
+            # Fail here rather than after the build if the key is not decodable.
+            if [ -n "$ASC_P8" ] && ! printf '%s' "$ASC_P8" | base64 --decode > /dev/null 2>&1; then
+              echo "::error::ASC_API_KEY_P8_BASE64 is not valid base64. Re-encode with: base64 -i AuthKey_XXXX.p8"
+              missing=1
+            fi
+          fi
+          [ "$missing" = "0" ] || exit 1
+          echo "All required credentials present."
 
       - name: Build (local)
         env:
@@ -134,20 +153,29 @@ jobs:
         if: github.event_name == 'push' || inputs.submit
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          EXPO_APPLE_ID: ${{ secrets.EXPO_APPLE_ID }}
-          EXPO_TEAM_ID: ${{ secrets.EXPO_TEAM_ID }}
-          ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
-        # No Apple password. Submission uses the App Store Connect API Key that EAS
-        # holds server-side. `ascAppId` and `appleTeamId` are literals in eas.json —
-        # eas.json does NOT interpolate "$VAR", it reads the string verbatim, which is
-        # what failed run 33590371624. `appleId` is deliberately absent so EAS falls
-        # back to the EXPO_APPLE_ID env var and the address stays out of the file.
+          # An App Store Connect API Key, supplied entirely from secrets. Apple ID
+          # sign-in is deliberately not used: it requires 2FA and cannot complete
+          # unattended, which is why the key exists.
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          EXPO_APPLE_TEAM_ID: ${{ secrets.EXPO_TEAM_ID }}
+          EXPO_APPLE_TEAM_TYPE: INDIVIDUAL
         run: |
+          # Presence was checked in preflight. The private key never reaches the log
+          # and never touches the workspace.
+          export EXPO_ASC_API_KEY_PATH="$RUNNER_TEMP/asc-api-key.p8"
+          printf '%s' "$ASC_API_KEY_P8_BASE64" | base64 --decode > "$EXPO_ASC_API_KEY_PATH"
+          chmod 600 "$EXPO_ASC_API_KEY_PATH"
           eas submit \
             --platform ios \
             --profile production \
             --path "$RUNNER_TEMP/cambium.ipa" \
             --non-interactive
+
+      - name: Shred the API key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/asc-api-key.p8"
 
   # ── Android ────────────────────────────────────────────────────────────────
   android:
