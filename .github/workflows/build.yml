@@ -25,12 +25,21 @@ on:
         type: boolean
         description: Submit the iOS build to TestFlight
         default: true
+      profile:
+        type: choice
+        description: >-
+          production ships the real thing. testflight bypasses the paywall so the app
+          behind it can be tested, and must never be promoted to App Store review.
+        default: production
+        options: [production, testflight]
 
 permissions:
   contents: read
 
 env:
   APP_REPO: KR4010/cambium
+  # A push always builds the real thing. Only a deliberate dispatch can bypass.
+  BUILD_PROFILE: ${{ github.event_name == 'push' && 'production' || inputs.profile }}
   # Node 20 reached end of life in April 2026 and GitHub now force-runs actions that
   # target it on a newer runtime. 22 is LTS and is what Expo SDK 54 supports.
   NODE_VERSION: '22'
@@ -128,6 +137,19 @@ jobs:
           [ "$missing" = "0" ] || exit 1
           echo "All required credentials present."
 
+      - name: Refuse a production build that carries the tester bypass
+        # eas.json sets the flag only on the testflight profile. This guards against
+        # it being pasted into production by hand.
+        run: |
+          if [ "$BUILD_PROFILE" = "production" ] && node -e "process.exit(require('./eas.json').build.production.env?.EXPO_PUBLIC_TESTER_BUILD ? 0 : 1)"; then
+            echo "::error::The production profile sets EXPO_PUBLIC_TESTER_BUILD. A shippable build must never bypass the paywall."
+            exit 1
+          fi
+          if [ "$BUILD_PROFILE" = "testflight" ]; then
+            echo "::warning::TESTER profile — the paywall is bypassed. This build must NOT be promoted to App Store review."
+          fi
+          echo "Profile: $BUILD_PROFILE"
+
       - name: Build (local)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -136,7 +158,7 @@ jobs:
         run: |
           eas build \
             --platform ios \
-            --profile production \
+            --profile "$BUILD_PROFILE" \
             --local \
             --non-interactive \
             --output "$RUNNER_TEMP/cambium.ipa"
@@ -144,7 +166,7 @@ jobs:
       - name: Keep the build
         uses: actions/upload-artifact@v5
         with:
-          name: cambium-ios-${{ github.run_number }}
+          name: cambium-ios-${{ env.BUILD_PROFILE }}-${{ github.run_number }}
           path: ${{ runner.temp }}/cambium.ipa
           retention-days: 14
           if-no-files-found: error
@@ -169,7 +191,7 @@ jobs:
           chmod 600 "$EXPO_ASC_API_KEY_PATH"
           eas submit \
             --platform ios \
-            --profile production \
+            --profile "$BUILD_PROFILE" \
             --path "$RUNNER_TEMP/cambium.ipa" \
             --non-interactive
 
@@ -212,7 +234,7 @@ jobs:
         run: |
           eas build \
             --platform android \
-            --profile production \
+            --profile "$BUILD_PROFILE" \
             --local \
             --non-interactive \
             --output "$RUNNER_TEMP/cambium.aab"
