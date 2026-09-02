@@ -122,6 +122,14 @@ jobs:
             --non-interactive \
             --output "$RUNNER_TEMP/cambium.ipa"
 
+      - name: Keep the build
+        uses: actions/upload-artifact@v5
+        with:
+          name: cambium-ios-${{ github.run_number }}
+          path: ${{ runner.temp }}/cambium.ipa
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Submit to TestFlight
         if: github.event_name == 'push' || inputs.submit
         env:
@@ -130,23 +138,16 @@ jobs:
           EXPO_TEAM_ID: ${{ secrets.EXPO_TEAM_ID }}
           ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
         # No Apple password. Submission uses the App Store Connect API Key that EAS
-        # holds server-side, so EXPO_TOKEN is the only credential needed. If that key is
-        # ever revoked, the fallback is EXPO_APPLE_APP_SPECIFIC_PASSWORD from
-        # appleid.apple.com, added here as another env entry.
+        # holds server-side. `ascAppId` and `appleTeamId` are literals in eas.json —
+        # eas.json does NOT interpolate "$VAR", it reads the string verbatim, which is
+        # what failed run 33590371624. `appleId` is deliberately absent so EAS falls
+        # back to the EXPO_APPLE_ID env var and the address stays out of the file.
         run: |
           eas submit \
             --platform ios \
             --profile production \
             --path "$RUNNER_TEMP/cambium.ipa" \
             --non-interactive
-
-      - name: Keep the build
-        uses: actions/upload-artifact@v5
-        with:
-          name: cambium-ios-${{ github.run_number }}
-          path: ${{ runner.temp }}/cambium.ipa
-          retention-days: 14
-          if-no-files-found: error
 
   # ── Android ────────────────────────────────────────────────────────────────
   android:
