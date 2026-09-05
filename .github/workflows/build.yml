@@ -111,6 +111,8 @@ jobs:
         # surfaces at the submit step costs a twelve-minute build to discover.
         env:
           RC_KEY: ${{ secrets.EXPO_PUBLIC_REVENUECAT_KEY_IOS }}
+          SB_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          SB_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           ASC_P8: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -120,6 +122,11 @@ jobs:
           if [ -z "$RC_KEY" ]; then
             echo "::error::EXPO_PUBLIC_REVENUECAT_KEY_IOS is not set. A release build without it ships a dead paywall."
             missing=1
+          fi
+          # Not fatal: the app is designed to run without accounts, and Friends is the
+          # only surface that needs them. Warn loudly rather than block a build.
+          if [ -z "$SB_URL" ] || [ -z "$SB_KEY" ]; then
+            echo "::warning::Supabase is not configured. Accounts and Friends will be unavailable in this build."
           fi
           if [ "$WILL_SUBMIT" = "true" ]; then
             for name in ASC_P8 ASC_KEY_ID ASC_ISSUER_ID; do
@@ -154,6 +161,8 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           EXPO_PUBLIC_REVENUECAT_KEY_IOS: ${{ secrets.EXPO_PUBLIC_REVENUECAT_KEY_IOS }}
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           NODE_ENV: production
         run: |
           eas build \
@@ -230,6 +239,8 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           EXPO_PUBLIC_REVENUECAT_KEY_ANDROID: ${{ secrets.EXPO_PUBLIC_REVENUECAT_KEY_ANDROID }}
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           NODE_ENV: production
         run: |
           eas build \
