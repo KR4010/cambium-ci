@@ -68,3 +68,11 @@ Start with manual. Add the dispatch once the pipeline has run green a few times.
 - **Print secrets.** No `cat .env`, no key lengths, no prefixes.
 - **Skip the gate.** Typecheck, lint at zero warnings, the full test suite and a
   bundle check all pass before a runner is spent on a build.
+
+## Building an app correction before merging
+
+Manual runs accept `app_ref`, which can be an exact app commit SHA. All jobs check
+out that same revision. Use `production` for an App Store candidate; `testflight`
+is the existing tester-bypass profile. The account-service preflight now fails a
+release when Supabase is unavailable or Apple sign-in is disabled. The selected
+app revision must include `scripts/check-release-services.mjs`.
