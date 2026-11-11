@@ -86,8 +86,11 @@ jobs:
   # ── iOS ────────────────────────────────────────────────────────────────────
   ios:
     needs: checks
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 90
+    env:
+      # SDK 54 uses the legacy lifecycle. SDK 27 linking requires a separate migration.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' &&
@@ -105,7 +108,10 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm install -g eas-cli
+      - run: npm install -g eas-cli@25.3.0
+
+      - name: Verify pinned Xcode
+        run: xcodebuild -version
 
       - name: Verify EAS auth
         # Fail here with a clear cause rather than 40 minutes into a build.
@@ -204,6 +210,9 @@ jobs:
             --non-interactive \
             --output "$RUNNER_TEMP/cambium.ipa"
 
+      - name: Verify iOS archive
+        run: python3 scripts/verify-ios-artifact.py "$RUNNER_TEMP/cambium.ipa"
+
       - name: Keep the build
         uses: actions/upload-artifact@v5
         with:
@@ -266,7 +275,7 @@ jobs:
           java-version: '17'
 
       - run: npm ci
-      - run: npm install -g eas-cli
+      - run: npm install -g eas-cli@25.3.0
 
       - name: Verify account service
         env:
