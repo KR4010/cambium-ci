@@ -16,6 +16,14 @@ on:
     paths-ignore: ['**.md', 'docs/**', 'LICENSE']
   workflow_dispatch:
     inputs:
+      upload_existing_run:
+        type: string
+        description: Existing successful build run to upload without rebuilding (blank for normal build)
+        default: ''
+      upload_existing_artifact:
+        type: string
+        description: Exact artifact name from that run
+        default: ''
       app_ref:
         type: string
         description: App commit or branch to validate and build
@@ -39,6 +47,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   APP_REPO: KR4010/cambium
@@ -54,6 +63,7 @@ jobs:
   # Nothing is built until the code is known good. These are the same four
   # commands used locally, so a green CI means exactly what a green terminal does.
   checks:
+    if: ${{ !inputs.upload_existing_run }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -92,9 +102,10 @@ jobs:
       # SDK 54 uses the legacy lifecycle. SDK 27 linking requires a separate migration.
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' &&
-       (inputs.build == 'ios' || inputs.build == 'all'))
+      !inputs.upload_existing_run &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' &&
+        (inputs.build == 'ios' || inputs.build == 'all')))
     steps:
       - uses: actions/checkout@v5
         with:
@@ -307,3 +318,67 @@ jobs:
           path: ${{ runner.temp }}/cambium.aab
           retention-days: 14
           if-no-files-found: error
+
+  upload_existing_ios:
+    if: github.event_name == 'workflow_dispatch' && inputs.upload_existing_run != ''
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      FASTLANE_SKIP_UPDATE_CHECK: '1'
+      FASTLANE_HIDE_CHANGELOG: '1'
+      FASTLANE_OPT_OUT_USAGE: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.APP_REPO }}
+          ref: ${{ env.APP_REF }}
+          token: ${{ secrets.APP_REPO_PAT }}
+
+      - name: Require the tester profile
+        env:
+          ARTIFACT_NAME: ${{ inputs.upload_existing_artifact }}
+        run: |
+          test "$BUILD_PROFILE" = testflight
+          test -n "$ARTIFACT_NAME"
+          git rev-parse HEAD
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ inputs.upload_existing_artifact }}
+          run-id: ${{ inputs.upload_existing_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/existing-ipa
+
+      - name: Verify the existing archive
+        run: python3 scripts/verify-ios-artifact.py "$RUNNER_TEMP/existing-ipa/cambium.ipa"
+
+      - name: Upload the verified archive to Apple
+        env:
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          python3 - <<'PYCODE'
+          import base64, json, os
+          from pathlib import Path
+          target = Path(os.environ['RUNNER_TEMP']) / 'asc-upload.json'
+          target.write_text(json.dumps({
+              'key_id': os.environ['ASC_KEY_ID'],
+              'issuer_id': os.environ['ASC_ISSUER_ID'],
+              'key': base64.b64decode(os.environ['ASC_API_KEY_P8_BASE64']).decode(),
+              'in_house': False,
+              'duration': 1200,
+          }))
+          target.chmod(0o600)
+          PYCODE
+          fastlane run upload_to_testflight \
+            ipa:"$RUNNER_TEMP/existing-ipa/cambium.ipa" \
+            api_key_path:"$RUNNER_TEMP/asc-upload.json" \
+            skip_submission:true \
+            skip_waiting_for_build_processing:true \
+            distribute_external:false
+
+      - name: Remove temporary upload credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/asc-upload.json"
